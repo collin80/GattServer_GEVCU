@@ -1,0 +1,4 @@
+[Project]
+Name=GattServer
+Manager=KDevCMakeManager
+VersionControl=kdevgit

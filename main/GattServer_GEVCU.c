@@ -33,16 +33,19 @@
 #define GEVCU_PROFILE_NUM 			    1
 #define GEVCU_PROFILE_APP_IDX 			0
 #define ESP_GEVCU_APP_ID			    0x55
-#define GEVCU_DEVICE_NAME              "GEVCU 6.2 ECU"
-#define GEVCU_TABLE_TAG                "GATT_SERVER"
-#define GEVCU_MANUFACTURER_DATA_LEN    17
-#define GEVCU_SVC_INST_ID	    	0
+#define GEVCU_DEVICE_NAME               "GEVCU 6.2 ECU"
+#define GEVCU_TABLE_TAG                 "GATT_SERVER"
+#define GEVCU_MANUFACTURER_DATA_LEN     17
+#define GEVCU_SVC_INST_ID	    	    0
 
 #define GATTS_DEMO_CHAR_VAL_LEN_MAX		0x40
 
 
-static uint16_t numAttributes;
-uint16_t gevcu_handle_table[300];
+uint16_t numAttributes[3] = {0,0,0};
+uint16_t currTablePtr = 0;
+int      serviceCount = 0;
+int      servicePtr = 0;
+uint16_t gevcu_handle_table[100];
 uint8_t gevcu_service_locs[3] = {0, 0, 0};
 
 GEVCU_PARAM_CACHE_t params;
@@ -50,6 +53,8 @@ GEVCU_PARAM_CACHE_t params;
 //Attributes with a length of 0 are special "this is a service definition" lines
 //Attributes end with a 0xFFFF UUID record as a terminator. It isn't actually included in resulting list.
 //divide chracteristics up into three services (Motoring stuff), "BMS type stuff" "System status/config"
+//It appears that there is a hard limit of 24 characteristics per service, at least if you use all the configuration
+//items I'm using. The limit seems to be about 100 handles per service. Maybe look into where that limit originates.
 GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x3100, ESP_GATT_CHAR_PROP_BIT_READ, 0, 0, "",                         //define 0x3100 Service (Motor config / performance)
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
@@ -97,9 +102,9 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_MOMENT_OF_FORCE_NEWTON_METRE, 1, 0}, 
         (uint8_t *)&params.maxTorque},
 
-    //{0x3200, ESP_GATT_CHAR_PROP_BIT_READ, 0, 0, "",                         //define 0x3200 Service (BMS and Throttle)
-    //    {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-    //    (uint8_t *)&params.torqueRequested},
+    {0x3200, ESP_GATT_CHAR_PROP_BIT_READ, 0, 0, "",                         //define 0x3200 Service (BMS and Throttle)
+        {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
+        (uint8_t *)&params.torqueRequested},
     {0x3201, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "HV Bus Voltage", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_ELECTRIC_POTENTIAL_DIFFERENCE_VOLT, 1, 0}, 
         (uint8_t *)&params.busVoltage},
@@ -139,49 +144,43 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x320D, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle 2 Max", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.throttle2Max},
-    {0x320E, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Num Throttle Pots", 
-        {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-        (uint8_t *)&params.numThrottlePots},
-    {0x320F, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Type", 
-        {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-        (uint8_t *)&params.throttleType},
-    {0x3210, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Regen Max", 
+    {0x320E, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Regen Max", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleRegenMax},
-    {0x3211, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Regen Min", 
+    {0x320F, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Regen Min", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
-        (uint8_t *)&params.throttleRegenMin},
-    {0x3212, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Fwd Start", 
+        (uint8_t *)&params.throttleRegenMin}, 
+    {0x3210, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Fwd Start", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleFwd},
-    {0x3213, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Map Point", 
+    {0x3211, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Map Point", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleMap},
-    {0x3214, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Min Regen", 
+    {0x3212, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Min Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleLowestRegen},
-    {0x3215, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Max Regen", 
+    {0x3213, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Max Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleHighestRegen},
-    {0x3216, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Creep", 
+    {0x3214, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Creep", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleCreep},
-    {0x3217, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Brake Min", 
+    {0x3215, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Brake Min", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-        (uint8_t *)&params.brakeMin},
-    {0x3218, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Brake Max", 
+        (uint8_t *)&params.brakeMin}, 
+    {0x3216, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Brake Max", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-        (uint8_t *)&params.brakeMax},
-    {0x3219, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Min Regen", 
+        (uint8_t *)&params.brakeMax}, 
+    {0x3217, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Min Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
-        (uint8_t *)&params.brakeRegenMin},
-    {0x321A, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Max Regen", 
+        (uint8_t *)&params.brakeRegenMin}, 
+    {0x3218, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Max Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.brakeRegenMax},
-    
-    //{0x3300, ESP_GATT_CHAR_PROP_BIT_READ, 0, 0, "",                         //define 0x3300 Service (System config and status)
-    //    {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-    //    (uint8_t *)&params.torqueRequested},
+
+    {0x3300, ESP_GATT_CHAR_PROP_BIT_READ, 0, 0, "",                         //define 0x3300 Service (System config and status)
+        {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
+        (uint8_t *)&params.torqueRequested},
     {0x3301, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "isRunning", 
         {GATT_PRESENT_FORMAT_BOOLEAN, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.isRunning},
@@ -247,7 +246,14 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
         (uint8_t *)&params.deviceEnable1},
     {0x3316, ESP_GATT_CHAR_PROP_BIT_READ, 4, 4, "Device Enable Bits2", 
         {GATT_PRESENT_FORMAT_UINT32, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
-        (uint8_t *)&params.deviceEnable2},
+        (uint8_t *)&params.deviceEnable2}, 
+    {0x3317, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Num Throttle Pots", 
+        {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
+        (uint8_t *)&params.numThrottlePots}, 
+    {0x3318, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Type", 
+        {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
+        (uint8_t *)&params.throttleType},
+
     {0xFFFF, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.torqueRequested}, 
@@ -331,77 +337,78 @@ static const uint8_t char_prop_read_write = ESP_GATT_CHAR_PROP_BIT_WRITE|ESP_GAT
 /// Attribute table - everything is an attribute, services, characteristics, attributes on characteristics.
 //To add attributes like descriptor and presentation to a characteristic you just add them after the characteristic
 //and before the next characteristic. This array has to be at least five times the size of the characteristics array
-static esp_gatts_attr_db_t gevcu_gatt_db[400];
+static esp_gatts_attr_db_t gevcu_gatt_db[3][100]; //a separate table for each service.
 //ESP_GATT_ATTR_HANDLE_MAX has to be this large too I think. It's found in esp32/esp-idf/components/bt/bluedroid/api/include/esp_gatt_defs.h
 
 static void generateAttrTable()
 {
-    int counter = 0;
+    int counter = currTablePtr;
     int attrCount = 0;
     int handleCount = 0; //some attributes don't get handles
-    int locs = 0;
 
     while (GEVCU_Characteristics[counter].id < 0xFFFF)
     {
         if (GEVCU_Characteristics[counter].maxLen == 0) //Create a new service entry
         {
-            gevcu_service_locs[locs++] = attrCount;
-            gevcu_gatt_db[attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
-            gevcu_gatt_db[attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
-            gevcu_gatt_db[attrCount].att_desc.uuid_p = (uint8_t *)&primary_service_uuid;
-            gevcu_gatt_db[attrCount].att_desc.perm = ESP_GATT_PERM_READ;
-            gevcu_gatt_db[attrCount].att_desc.max_length = sizeof(uint16_t);
-            gevcu_gatt_db[attrCount].att_desc.length = sizeof(uint16_t);
-            gevcu_gatt_db[attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].id;
+            if (serviceCount > 0) numAttributes[serviceCount - 1] = attrCount;
+            attrCount = 0;
+            handleCount = 0;
+            serviceCount++;
+            gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_p = (uint8_t *)&primary_service_uuid;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm = ESP_GATT_PERM_READ;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.max_length = sizeof(uint16_t);
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.length = sizeof(uint16_t);
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].id;
             attrCount++;
         }
         else { //set up a new characteristic
             //declaration (sets read, write, notify permissions)
-            gevcu_gatt_db[attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
-            gevcu_gatt_db[attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
-            gevcu_gatt_db[attrCount].att_desc.uuid_p = (uint8_t *)&character_declaration_uuid;
-            gevcu_gatt_db[attrCount].att_desc.perm = ESP_GATT_PERM_READ;
-            gevcu_gatt_db[attrCount].att_desc.max_length = CHAR_DECLARATION_SIZE;
-            gevcu_gatt_db[attrCount].att_desc.length = CHAR_DECLARATION_SIZE;
-            gevcu_gatt_db[attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].properties;
+            gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_p = (uint8_t *)&character_declaration_uuid;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm = ESP_GATT_PERM_READ;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.max_length = CHAR_DECLARATION_SIZE;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.length = CHAR_DECLARATION_SIZE;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].properties;
             attrCount++;
 
             //value - sets the UUID of the characteristic too.
-            gevcu_gatt_db[attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
-            gevcu_gatt_db[attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
-            gevcu_gatt_db[attrCount].att_desc.uuid_p = (uint8_t *)&GEVCU_Characteristics[counter].id;
-            gevcu_gatt_db[attrCount].att_desc.perm = ESP_GATT_PERM_READ;
-            gevcu_gatt_db[attrCount].att_desc.max_length = GEVCU_Characteristics[counter].maxLen;
-            gevcu_gatt_db[attrCount].att_desc.length = GEVCU_Characteristics[counter].maxLen;
-            gevcu_gatt_db[attrCount].att_desc.value = GEVCU_Characteristics[counter].data;
+            gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_p = (uint8_t *)&GEVCU_Characteristics[counter].id;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm = ESP_GATT_PERM_READ;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.max_length = GEVCU_Characteristics[counter].maxLen;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.length = GEVCU_Characteristics[counter].maxLen;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = GEVCU_Characteristics[counter].data;
             attrCount++;
 
             //description
-            gevcu_gatt_db[attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
-            gevcu_gatt_db[attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
-            gevcu_gatt_db[attrCount].att_desc.uuid_p = (uint8_t *)&character_descriptor;
-            gevcu_gatt_db[attrCount].att_desc.perm = ESP_GATT_PERM_READ;
-            gevcu_gatt_db[attrCount].att_desc.max_length = strlen(GEVCU_Characteristics[counter].description);
-            gevcu_gatt_db[attrCount].att_desc.length = strlen(GEVCU_Characteristics[counter].description);
-            gevcu_gatt_db[attrCount].att_desc.value = (uint8_t *)GEVCU_Characteristics[counter].description;
+            gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_p = (uint8_t *)&character_descriptor;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm = ESP_GATT_PERM_READ;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.max_length = strlen(GEVCU_Characteristics[counter].description);
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.length = strlen(GEVCU_Characteristics[counter].description);
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = (uint8_t *)GEVCU_Characteristics[counter].description;
             attrCount++;
             handleCount++;
 
             //Presentation byte
-            gevcu_gatt_db[attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
-            gevcu_gatt_db[attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
-            gevcu_gatt_db[attrCount].att_desc.uuid_p = (uint8_t *)&character_presentation;
-            gevcu_gatt_db[attrCount].att_desc.perm = ESP_GATT_PERM_READ;
-            gevcu_gatt_db[attrCount].att_desc.max_length = 7;
-            gevcu_gatt_db[attrCount].att_desc.length = 7;
-            gevcu_gatt_db[attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].presentation;
+            gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_p = (uint8_t *)&character_presentation;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm = ESP_GATT_PERM_READ;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.max_length = 7;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.length = 7;
+            gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].presentation;
             attrCount++;
             handleCount++;
         }
         counter++;
-    }
-
-    numAttributes = attrCount;
+    }    
+    numAttributes[serviceCount - 1] = attrCount;
 };
 
 
@@ -438,8 +445,9 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
        	esp_ble_gap_config_adv_data(&gevcu_adv_config);
 
         ESP_LOGI(GEVCU_TABLE_TAG,"%s %d\n", __func__, __LINE__);
-		esp_ble_gatts_create_attr_tab(gevcu_gatt_db, gatts_if, 
-								numAttributes, 0);
+        ESP_LOGI(GEVCU_TABLE_TAG,"Num attribs in this table: %i", numAttributes[0]);
+		esp_ble_gatts_create_attr_tab(gevcu_gatt_db[servicePtr], gatts_if, 
+								numAttributes[servicePtr], servicePtr);
         ESP_LOGI(GEVCU_TABLE_TAG,"%s %d\n", __func__, __LINE__);
 
        	break;
@@ -490,24 +498,26 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 		break;
     case ESP_GATTS_CREAT_ATTR_TAB_EVT:{ //22
 		ESP_LOGI(GEVCU_TABLE_TAG,"The number handle =%i",param->add_attr_tab.num_handle);
-        ESP_LOGI(GEVCU_TABLE_TAG,"Number of attributes %i", numAttributes);
+        ESP_LOGI(GEVCU_TABLE_TAG,"Number of attributes %i", numAttributes[servicePtr]);
         ESP_LOGI(GEVCU_TABLE_TAG,"Param Address: %x", (unsigned int)param);
         ESP_LOGI(GEVCU_TABLE_TAG,"add_addr_tab Address: %x", (unsigned int)&param->add_attr_tab);
         ESP_LOGI(GEVCU_TABLE_TAG,"handles Address: %x", (unsigned int)param->add_attr_tab.handles);
-		if(param->add_attr_tab.num_handle == numAttributes) {			
+		if(param->add_attr_tab.handles || param->add_attr_tab.num_handle == numAttributes[servicePtr]) {			
 			memcpy(gevcu_handle_table, param->add_attr_tab.handles, 
-					numAttributes);
+					numAttributes[servicePtr]);
+            
             for (int x = 0 ; x < param->add_attr_tab.num_handle; x++) ESP_LOGI(GEVCU_TABLE_TAG,"Handle %i is %i", x, gevcu_handle_table[x]);
-
-            //for (int y = 0; y < 3; y++)
-            //{
-                esp_ble_gatts_start_service(gevcu_handle_table[gevcu_service_locs[0]]);
-                ESP_LOGI(GEVCU_TABLE_TAG,"Attempted to start service with table ID %i", gevcu_handle_table[gevcu_service_locs[0]]);
-                
-                esp_ble_gatts_start_service(gevcu_handle_table[gevcu_service_locs[1]]);
-                ESP_LOGI(GEVCU_TABLE_TAG,"Attempted to start service with table ID %i", gevcu_handle_table[gevcu_service_locs[1]]);
-                
-           // }
+            
+            esp_ble_gatts_start_service(gevcu_handle_table[0]);
+            ESP_LOGI(GEVCU_TABLE_TAG,"Attempted to start service with table ID %i", gevcu_handle_table[0]);
+            
+            if (servicePtr < serviceCount - 1)
+            {
+                servicePtr++;
+                ESP_LOGI(GEVCU_TABLE_TAG,"Num attribs in this next table: %i", numAttributes[servicePtr]);
+                esp_ble_gatts_create_attr_tab(gevcu_gatt_db[servicePtr], gatts_if, 
+                                numAttributes[servicePtr], servicePtr);
+            }
 		}
 		break;
 	}

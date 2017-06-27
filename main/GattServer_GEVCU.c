@@ -12,13 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stdio.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_event.h"
+#include "esp_event_loop.h"
+#include "soc/rtc_cntl_reg.h"
+#include "rom/cache.h"
+#include "driver/spi_slave.h"
+#include "esp_spi_flash.h"
+
 #include "bt.h"
 #include "bta_api.h"
 
@@ -29,6 +42,12 @@
 #include "esp_bt_main.h"
 #include "GattServer_GEVCU.h"
 
+//Hardware defines for which pins we've got the SPI signals routed to.
+#define SPI_INT 4
+#define SPI_MOSI 23
+#define SPI_MISO 19
+#define SPI_SCLK 18
+#define SPI_CS 5
 
 #define GEVCU_PROFILE_NUM 			    1
 #define GEVCU_PROFILE_APP_IDX 			0
@@ -334,6 +353,56 @@ static const uint8_t char_prop_notify = ESP_GATT_CHAR_PROP_BIT_NOTIFY;
 static const uint8_t char_prop_read = ESP_GATT_CHAR_PROP_BIT_READ;
 static const uint8_t char_prop_read_write = ESP_GATT_CHAR_PROP_BIT_WRITE|ESP_GATT_CHAR_PROP_BIT_READ;
 
+
+//Called after a transaction is queued and ready for pickup by master. We use this to set the interrupt line high.
+void spi_post_queued_cb(spi_slave_transaction_t *trans) {
+    WRITE_PERI_REG(GPIO_OUT_W1TS_REG, (1<<SPI_INT));
+}
+
+//Called after transaction is sent/received. We use this to set the interrupt line low.
+void spi_post_trans_cb(spi_slave_transaction_t *trans) {
+    WRITE_PERI_REG(GPIO_OUT_W1TC_REG, (1<<SPI_INT));
+}
+
+void spiSetup() {
+    esp_err_t ret;
+
+    //Configuration for the SPI bus
+    spi_bus_config_t buscfg={
+        .mosi_io_num=SPI_MOSI,
+        .miso_io_num=SPI_MISO,
+        .sclk_io_num=SPI_SCLK
+    };
+
+    //Configuration for the SPI slave interface
+    spi_slave_interface_config_t slvcfg={
+        .mode=0,
+        .spics_io_num=SPI_CS,
+        .queue_size=3,
+        .flags=0,
+        .post_setup_cb=spi_post_queued_cb,
+        .post_trans_cb=spi_post_trans_cb
+    };
+
+    //Configuration for the interrupt line
+    gpio_config_t io_conf={
+        .intr_type=GPIO_INTR_DISABLE,
+        .mode=GPIO_MODE_OUTPUT,
+        .pin_bit_mask=(1<<SPI_INT)
+    };
+
+    //Configure interrupt line as output
+    gpio_config(&io_conf);
+    //Enable pull-ups on SPI lines so we don't detect rogue pulses when no master is connected.
+    gpio_set_pull_mode(SPI_MOSI, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(SPI_SCLK, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(SPI_CS, GPIO_PULLUP_ONLY);
+
+    //Initialize SPI slave interface
+    ret=spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, 1);
+    assert(ret==ESP_OK);
+}
+
 /// Attribute table - everything is an attribute, services, characteristics, attributes on characteristics.
 //To add attributes like descriptor and presentation to a characteristic you just add them after the characteristic
 //and before the next characteristic. This array has to be at least five times the size of the characteristics array
@@ -595,5 +664,41 @@ void app_main()
     esp_ble_gap_register_callback(gap_event_handler);
     esp_ble_gatts_app_register(ESP_GEVCU_APP_ID);
     ESP_LOGI(GEVCU_TABLE_TAG,"%s %d\n", __func__, __LINE__);
+    
+    spiSetup();
+    ESP_LOGI(GEVCU_TABLE_TAG,"Init of SPI complete");
+    
+    char sendbuf[129]="";
+    char recvbuf[129]="";
+    memset(recvbuf, 0, 33);
+    spi_slave_transaction_t t;
+    memset(&t, 0, sizeof(t));
+    int n = 0;
+    
+    //test code copied from spi_slave example in esp-idf. Not you'd want to do in final sketch
+    while(1) {
+        //Clear receive buffer, set send buffer to something sane
+        memset(recvbuf, 0xA5, 129);
+        sprintf(sendbuf, "This is the receiver, sending data for transmission number %04d.", n);
+
+        //Set up a transaction of 128 bytes to send/receive
+        t.length=128*8;
+        t.tx_buffer=sendbuf;
+        t.rx_buffer=recvbuf;
+        /* This call enables the SPI slave interface to send/receive to the sendbuf and recvbuf. The transaction is
+        initialized by the SPI master, however, so it will not actually happen until the master starts a hardware transaction
+        by pulling CS low and pulsing the clock etc. In this specific example, we use the handshake line, pulled up by the
+        .post_setup_cb callback that is called as soon as a transaction is ready, to let the master know it is free to transfer
+        data.
+        */
+        ret=spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+
+        //spi_slave_transmit does not return until the master has done a transmission, so by here we have sent our data and
+        //received data from the master. Print it.
+        printf("Received: %s\n", recvbuf);
+        n++;
+    }
+
+    
     return;
 }

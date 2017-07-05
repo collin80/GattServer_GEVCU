@@ -64,8 +64,19 @@ uint16_t numAttributes[3] = {0,0,0};
 uint16_t currTablePtr = 0;
 int      serviceCount = 0;
 int      servicePtr = 0;
-uint16_t gevcu_handle_table[100];
-uint8_t gevcu_service_locs[3] = {0, 0, 0};
+int      handlePtr = 0;
+
+//use passed handle as an offset to this table and get back a characteristic struct or null
+//so far it is traditional that handles start at 40 and go up by one each time with each characteristic consisting
+//of 4 handles. Handle 1 = Declaration of char, 2 = value and UUID, 3 = Description, 4 = Presentation
+//Service takes up first entry in returned handles so first char is 41, first char's value is 42, etc.
+GATT_CHARACTERISTIC_t* gevcu_handle_table[300];
+
+/// Attribute table - everything is an attribute, services, characteristics, attributes on characteristics.
+//To add attributes like descriptor and presentation to a characteristic you just add them after the characteristic
+//and before the next characteristic.
+static esp_gatts_attr_db_t gevcu_gatt_db[3][100]; //a separate table for each service.
+
 
 GEVCU_PARAM_CACHE_t params;
 
@@ -90,10 +101,10 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x3104, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "SpeedActual", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_ANGULAR_VELOCITY_REVOLUTION_PER_MINUTE, 1, 0}, 
         (uint8_t *)&params.speedActual},
-    {0x3105, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "PowerMode", 
+    {0x3105, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "PowerMode", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.powerMode},
-    {0x3106, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Gear", 
+    {0x3106, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Gear", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.gear},
     {0x3107, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Motor Current", 
@@ -111,15 +122,19 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x310B, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "System Temperature", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_THERMODYNAMIC_TEMPERATURE_DEGREE_FAHRENHEIT, 1, 0}, 
         (uint8_t *)&params.systemTemperature},
-    {0x310C, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Nominal Voltage", 
+    {0x310C, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Nominal Voltage", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_ELECTRIC_POTENTIAL_DIFFERENCE_VOLT, 1, 0}, 
         (uint8_t *)&params.nomVoltage},
-    {0x310D, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Max RPMs", 
+    {0x310D, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Max RPMs", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_ANGULAR_VELOCITY_REVOLUTION_PER_MINUTE, 1, 0}, 
         (uint8_t *)&params.maxRPM},
-    {0x310E, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Max Torque", 
+    {0x310E, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Max Torque", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_MOMENT_OF_FORCE_NEWTON_METRE, 1, 0}, 
         (uint8_t *)&params.maxTorque},
+    {0x310F, ESP_GATT_CHAR_PROP_BIT_READ, 4, 4, "Time Running", 
+        {GATT_PRESENT_FORMAT_UINT32, 0, GATT_PRESENT_UNIT_TIME_SECOND, 1, 0}, 
+        (uint8_t *)&params.timeRunning},
+        
 
     {0x3200, ESP_GATT_CHAR_PROP_BIT_READ, 0, 0, "",                         //define 0x3200 Service (BMS and Throttle)
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
@@ -145,55 +160,55 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x3207, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "BrakeRaw", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.brakeRawLevel},
-    {0x3208, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "ThrottlePercentage", 
+    {0x3208, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "ThrottlePercentage", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttlePercentage},
-    {0x3209, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "BrakePercentage", 
+    {0x3209, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "BrakePercentage", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.brakePercentage},
-    {0x320A, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle 1 Min", 
+    {0x320A, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle 1 Min", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.throttle1Min},
-    {0x320B, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle 2 Min", 
+    {0x320B, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle 2 Min", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.throttle2Min}, 
-    {0x320C, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle 1 Max", 
+    {0x320C, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle 1 Max", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.throttle1Max},
-    {0x320D, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle 2 Max", 
+    {0x320D, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle 2 Max", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.throttle2Max},
-    {0x320E, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Regen Max", 
+    {0x320E, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle Regen Max", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleRegenMax},
-    {0x320F, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Regen Min", 
+    {0x320F, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle Regen Min", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleRegenMin}, 
-    {0x3210, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Fwd Start", 
+    {0x3210, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle Fwd Start", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleFwd},
-    {0x3211, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Throttle Map Point", 
+    {0x3211, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Throttle Map Point", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleMap},
-    {0x3212, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Min Regen", 
+    {0x3212, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Throttle Min Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleLowestRegen},
-    {0x3213, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Max Regen", 
+    {0x3213, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Throttle Max Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleHighestRegen},
-    {0x3214, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Creep", 
+    {0x3214, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Throttle Creep", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.throttleCreep},
-    {0x3215, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Brake Min", 
+    {0x3215, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Brake Min", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.brakeMin}, 
-    {0x3216, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Brake Max", 
+    {0x3216, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Brake Max", 
         {GATT_PRESENT_FORMAT_SINT16, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.brakeMax}, 
-    {0x3217, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Min Regen", 
+    {0x3217, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Brake Min Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.brakeRegenMin}, 
-    {0x3218, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Max Regen", 
+    {0x3218, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Brake Max Regen", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_PERCENTAGE, 1, 0}, 
         (uint8_t *)&params.brakeRegenMax},
 
@@ -209,13 +224,13 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x3303, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "isWarning", 
         {GATT_PRESENT_FORMAT_BOOLEAN, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.isWarning},
-    {0x3304, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "LoggingLevel", 
+    {0x3304, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "LoggingLevel", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.logLevel},
-    {0x3305, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Can0 Bitrate", 
+    {0x3305, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Can0 Bitrate", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_FREQUENCY_HERTZ, 1, 0}, 
         (uint8_t *)&params.can0Speed},
-    {0x3306, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Can1 Bitrate", 
+    {0x3306, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Can1 Bitrate", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_FREQUENCY_HERTZ, 1, 0}, 
         (uint8_t *)&params.can1Speed},
     {0x3307, ESP_GATT_CHAR_PROP_BIT_READ, 4, 4, "Status Bitfield 1", 
@@ -230,46 +245,46 @@ GATT_CHARACTERISTIC_t GEVCU_Characteristics[] = {
     {0x330A, ESP_GATT_CHAR_PROP_BIT_READ, 4, 4, "Dig Out Bitfield", 
         {GATT_PRESENT_FORMAT_UINT32, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.digitalOutputs},
-    {0x330B, ESP_GATT_CHAR_PROP_BIT_READ, 2, 2, "Precharge Time", 
+    {0x330B, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 2, 2, "Precharge Time", 
         {GATT_PRESENT_FORMAT_UINT16, 0, GATT_PRESENT_UNIT_TIME_SECOND, 1, 0}, 
         (uint8_t *)&params.prechargeDuration},
-    {0x320C, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Precharge Output",
+    {0x320C, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Precharge Output",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.prechargeRelay},
-    {0x330D, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Main Contactor Output",
+    {0x330D, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Main Contactor Output",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.mainContRelay},
-    {0x330E, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Cooling Relay Output",
+    {0x330E, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Cooling Relay Output",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.coolingRelay},
-    {0x330F, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Cool On Temperature",
+    {0x330F, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Cool On Temperature",
         {GATT_PRESENT_FORMAT_SINT8, 0, GATT_PRESENT_UNIT_THERMODYNAMIC_TEMPERATURE_DEGREE_FAHRENHEIT, 1, 0}, 
         (uint8_t *)&params.coolOnTemp},   
-    {0x3310, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Cool Off Temperature",
+    {0x3310, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Cool Off Temperature",
         {GATT_PRESENT_FORMAT_SINT8, 0, GATT_PRESENT_UNIT_THERMODYNAMIC_TEMPERATURE_DEGREE_FAHRENHEIT, 1, 0}, 
         (uint8_t *)&params.coolOffTemp},
-    {0x3311, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Brake Light Output",
+    {0x3311, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Brake Light Output",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.brakeLightOut},
-    {0x3312, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Reverse Light Output",
+    {0x3312, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Reverse Light Output",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.reverseLightOut},
-    {0x3313, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Enable Input",
+    {0x3313, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Enable Input",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.enableIn},
-    {0x3314, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Reverse Input",
+    {0x3314, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Reverse Input",
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.reverseIn},
-    {0x3315, ESP_GATT_CHAR_PROP_BIT_READ, 4, 4, "Device Enable Bits1", 
+    {0x3315, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 4, 4, "Device Enable Bits1", 
         {GATT_PRESENT_FORMAT_UINT32, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.deviceEnable1},
-    {0x3316, ESP_GATT_CHAR_PROP_BIT_READ, 4, 4, "Device Enable Bits2", 
+    {0x3316, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 4, 4, "Device Enable Bits2", 
         {GATT_PRESENT_FORMAT_UINT32, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.deviceEnable2}, 
-    {0x3317, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Num Throttle Pots", 
+    {0x3317, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Num Throttle Pots", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.numThrottlePots}, 
-    {0x3318, ESP_GATT_CHAR_PROP_BIT_READ, 1, 1, "Throttle Type", 
+    {0x3318, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE, 1, 1, "Throttle Type", 
         {GATT_PRESENT_FORMAT_UINT8, 0, GATT_PRESENT_UNIT_NONE, 1, 0}, 
         (uint8_t *)&params.throttleType},
 
@@ -403,11 +418,16 @@ void spiSetup() {
     assert(ret==ESP_OK);
 }
 
-/// Attribute table - everything is an attribute, services, characteristics, attributes on characteristics.
-//To add attributes like descriptor and presentation to a characteristic you just add them after the characteristic
-//and before the next characteristic. This array has to be at least five times the size of the characteristics array
-static esp_gatts_attr_db_t gevcu_gatt_db[3][100]; //a separate table for each service.
-//ESP_GATT_ATTR_HANDLE_MAX has to be this large too I think. It's found in esp32/esp-idf/components/bt/bluedroid/api/include/esp_gatt_defs.h
+esp_err_t spi_slave_tx(spi_host_device_t host, spi_slave_transaction_t *trans_desc, spi_slave_transaction_t **ret_trans, TickType_t ticks_to_wait)
+{
+    esp_err_t ret;
+    //ToDo: check if any spi transfers in flight
+    ret = spi_slave_queue_trans(host, trans_desc, ticks_to_wait);
+    if (ret != ESP_OK) return ret;
+    ret = spi_slave_get_trans_result(host, ret_trans, ticks_to_wait);
+    if (ret != ESP_OK) return ret;
+    return ESP_OK;
+}
 
 static void generateAttrTable()
 {
@@ -432,7 +452,7 @@ static void generateAttrTable()
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].id;
             attrCount++;
         }
-        else { //set up a new characteristic
+        else { //set up a new characteristic 
             //declaration (sets read, write, notify permissions)
             gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
@@ -443,11 +463,13 @@ static void generateAttrTable()
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = (uint8_t *)&GEVCU_Characteristics[counter].properties;
             attrCount++;
 
-            //value - sets the UUID of the characteristic too.
+            //value - sets the UUID of the characteristic and data associated to this characteristic
             gevcu_gatt_db[serviceCount - 1][attrCount].attr_control.auto_rsp = ESP_GATT_AUTO_RSP;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_length = ESP_UUID_LEN_16;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.uuid_p = (uint8_t *)&GEVCU_Characteristics[counter].id;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm = ESP_GATT_PERM_READ;
+            if (GEVCU_Characteristics[counter].properties & ESP_GATT_CHAR_PROP_BIT_WRITE) //if we can write then we need to specify that here too.
+                gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.perm |= ESP_GATT_PERM_WRITE;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.max_length = GEVCU_Characteristics[counter].maxLen;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.length = GEVCU_Characteristics[counter].maxLen;
             gevcu_gatt_db[serviceCount - 1][attrCount].att_desc.value = GEVCU_Characteristics[counter].data;
@@ -520,9 +542,32 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
         ESP_LOGI(GEVCU_TABLE_TAG,"%s %d\n", __func__, __LINE__);
 
        	break;
-    case ESP_GATTS_READ_EVT: //1   
+    case ESP_GATTS_READ_EVT: //1
+    //struct gatts_read_evt_param {
+    //    uint16_t conn_id;               /*!< Connection id */
+    //    uint32_t trans_id;              /*!< Transfer id */
+    //    esp_bd_addr_t bda;              /*!< The bluetooth device address which been read */
+    //    uint16_t handle;                /*!< The attribute handle */
+    //    uint16_t offset;                /*!< Offset of the value, if the value is too long */
+    //    bool is_long;                   /*!< The value is too long or not */
+    //    bool need_rsp;                  /*!< The read operation need to do response */
+    //} read;
+        ESP_LOGI(GEVCU_TABLE_TAG,"GATT Server Read Event for handle: %i  name: %s", param->read.handle, gevcu_handle_table[param->read.handle]->description);
        	break;
     case ESP_GATTS_WRITE_EVT: //2
+    //struct gatts_write_evt_param {
+    //    uint16_t conn_id;               /*!< Connection id */
+    //    uint32_t trans_id;              /*!< Transfer id */
+    //    esp_bd_addr_t bda;              /*!< The bluetooth device address which been written */
+    //    uint16_t handle;                /*!< The attribute handle */
+    //    uint16_t offset;                /*!< Offset of the value, if the value is too long */
+    //    bool need_rsp;                  /*!< The write operation need to do response */
+    //    bool is_prep;                   /*!< This write operation is prepare write */
+    //    uint16_t len;                   /*!< The write attribute value length */
+    //    uint8_t *value;                 /*!< The write attribute value */
+    //} write;   
+        ESP_LOGI(GEVCU_TABLE_TAG,"GATT Server Write Event for handle: %i name: %s   len: %i, value: %i", param->write.handle, 
+                 gevcu_handle_table[param->write.handle]->description, param->write.len, *param->write.value);
       	break;
     case ESP_GATTS_EXEC_WRITE_EVT: //3
 		break;
@@ -575,10 +620,22 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 			memcpy(gevcu_handle_table, param->add_attr_tab.handles, 
 					numAttributes[servicePtr]);
             
-            for (int x = 0 ; x < param->add_attr_tab.num_handle; x++) ESP_LOGI(GEVCU_TABLE_TAG,"Handle %i is %i", x, gevcu_handle_table[x]);
+            int cnt = 0;
+            for (int x = 0 ; x < param->add_attr_tab.num_handle; x++) {
+                ESP_LOGI(GEVCU_TABLE_TAG,"Handle %i is %i", x, param->add_attr_tab.handles[x]);
+            }
             
-            esp_ble_gatts_start_service(gevcu_handle_table[0]);
-            ESP_LOGI(GEVCU_TABLE_TAG,"Attempted to start service with table ID %i", gevcu_handle_table[0]);
+            //service is first entry
+            gevcu_handle_table[param->add_attr_tab.handles[0]] = &GEVCU_Characteristics[handlePtr++];
+            for (int x = 1 ; x < param->add_attr_tab.num_handle; x = x + 4) {
+                gevcu_handle_table[param->add_attr_tab.handles[x]] = &GEVCU_Characteristics[handlePtr];
+                gevcu_handle_table[param->add_attr_tab.handles[x+1]] = &GEVCU_Characteristics[handlePtr];
+                gevcu_handle_table[param->add_attr_tab.handles[x+2]] = &GEVCU_Characteristics[handlePtr];
+                gevcu_handle_table[param->add_attr_tab.handles[x+3]] = &GEVCU_Characteristics[handlePtr++];
+            }
+            
+            esp_ble_gatts_start_service(param->add_attr_tab.handles[0]);
+            ESP_LOGI(GEVCU_TABLE_TAG,"Attempted to start service with table ID %i", param->add_attr_tab.handles[0]);
             
             if (servicePtr < serviceCount - 1)
             {
@@ -668,21 +725,23 @@ void app_main()
     spiSetup();
     ESP_LOGI(GEVCU_TABLE_TAG,"Init of SPI complete");
     
-    char sendbuf[129]="";
-    char recvbuf[129]="";
-    memset(recvbuf, 0, 33);
+    char sendbuf[32]="";
+    char recvbuf[32]="";
+    memset(sendbuf, 0, 32);
+    memset(recvbuf, 0, 32);
     spi_slave_transaction_t t;
+    spi_slave_transaction_t *r = 0;
     memset(&t, 0, sizeof(t));
     int n = 0;
     
-    //test code copied from spi_slave example in esp-idf. Not you'd want to do in final sketch
+    //test code copied from spi_slave example in esp-idf. Not what you'd want to do in final sketch
     while(1) {
-        //Clear receive buffer, set send buffer to something sane
-        memset(recvbuf, 0xA5, 129);
-        sprintf(sendbuf, "This is the receiver, sending data for transmission number %04d.", n);
+        //Clear both buffers as we currently have nothing to actually transmit but we need to say we do 
+        //in order to fire up our slave SPI interface to find out what the master side wants when they send us data
+        memset(recvbuf,  0, 32);
 
-        //Set up a transaction of 128 bytes to send/receive
-        t.length=128*8;
+        //Set up a transaction of 32 bytes to send/receive
+        t.length=32*8; //length in bits... honestly?!
         t.tx_buffer=sendbuf;
         t.rx_buffer=recvbuf;
         /* This call enables the SPI slave interface to send/receive to the sendbuf and recvbuf. The transaction is
@@ -691,12 +750,35 @@ void app_main()
         .post_setup_cb callback that is called as soon as a transaction is ready, to let the master know it is free to transfer
         data.
         */
-        ret=spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
+        ret = spi_slave_tx(HSPI_HOST, &t, &r, portMAX_DELAY);
 
-        //spi_slave_transmit does not return until the master has done a transmission, so by here we have sent our data and
-        //received data from the master. Print it.
-        printf("Received: %s\n", recvbuf);
-        n++;
+        //spi_slave_transmit does not return until the master has done a transmission, so here we'll have the received data in recvbuf
+        
+        printf("Number of bytes received: %i\n", r->length / 8);
+        for (int i = 0; i < r->length / 8; i++) printf("%x ", recvbuf[i]);
+        printf("\n");
+        
+        if (recvbuf[0] == 0xA5)
+        {
+            if (recvbuf[1] == 0x40)
+            {
+                printf("Request to update a parameter: %i\n", recvbuf[2]);
+                //recvbuf[3]
+
+            }
+            else if (recvbuf[1] == 0xC0)
+            {
+                printf("Request to get current value of parameter: %i\n", recvbuf[2]);
+            }
+            else
+            {
+                printf("Received start byte but crap second byte. Ignoring.\n");
+            }
+        }
+        else
+        {
+            printf("Received some random garbage. Ignoring it.\n");
+        }
     }
 
     

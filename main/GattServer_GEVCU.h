@@ -247,5 +247,6 @@ typedef struct
     uint16_t maxTorque;
     uint32_t deviceEnable1;
     uint32_t deviceEnable2;
+    uint32_t timeRunning;
 } GEVCU_PARAM_CACHE_t;
 

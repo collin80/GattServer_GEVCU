@@ -39,24 +39,77 @@ void setup() {
 
 void loop() {
    static uint32_t lastCount;
+   static int which = 0;
    if (Serial4.available()) Serial.write(Serial4.read());
 #ifdef BOOTLOADER
    if (Serial.available()) Serial4.write(Serial.read());
 #else
-   if ((lastCount + 100) < millis())
+   if ((lastCount + 100000) < millis())
    {
       lastCount = millis();
-      if (digitalRead(BLE_DFU))
+      digitalWrite(BLE_CS, LOW);
+      delayMicroseconds(10);
+      //Due to unending stupidity in the ESP32 design one must send SPI traffic
+      //with at least 8 bytes and then in multiples of 4 bytes or data could be lost.
+      //Yeah, that's stupid.
+      if (which == 0)
       {
-          digitalWrite(BLE_CS, LOW);
-          delayMicroseconds(10);
-          for (int i = 0; i < 128; i++) {
-              Serial.write(SPI.transfer('0' + i % 10));
-          }
-          digitalWrite(BLE_CS, HIGH);
-          Serial.println("got SPI");
+          SPI.transfer(0xA5);
+          SPI.transfer(0x40);
+          SPI.transfer(1);
+          SPI.transfer(40);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
       }
-      else Serial.println("Ain't no SPI");
+      if (which == 1)
+      {
+          SPI.transfer(0xA5);
+          SPI.transfer(0x40);
+          SPI.transfer(10);
+          SPI.transfer(40);
+          SPI.transfer(23);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+      }
+      if (which == 2)
+      {
+          SPI.transfer(0xA5);
+          SPI.transfer(0xC0);
+          SPI.transfer(5);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+      }
+      if (which == 3)
+      {
+          SPI.transfer(0xBE);
+          SPI.transfer(0x40);
+          SPI.transfer(1);
+          SPI.transfer(40);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+      }
+      if (which == 4)
+      {
+          SPI.transfer(0xA5);
+          SPI.transfer(0x4D);
+          SPI.transfer(1);
+          SPI.transfer(40);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+          SPI.transfer(0);
+      }      
+      
+      digitalWrite(BLE_CS, HIGH);      
+      which = (which + 1) % 5;
    }   
 #endif
    

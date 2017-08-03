@@ -369,6 +369,17 @@ static const uint8_t char_prop_read = ESP_GATT_CHAR_PROP_BIT_READ;
 static const uint8_t char_prop_read_write = ESP_GATT_CHAR_PROP_BIT_WRITE|ESP_GATT_CHAR_PROP_BIT_READ;
 
 
+GATT_CHARACTERISTIC_t* getCharacteristicByUUID(uint16_t uuid)
+{
+    int ptr = 0;
+    while (GEVCU_Characteristics[ptr].id < 0xFFFF)
+    {
+        if (GEVCU_Characteristics[ptr].id == uuid) return &GEVCU_Characteristics[ptr];
+        ptr++;
+    }
+    return 0;
+}
+
 //Called after a transaction is queued and ready for pickup by master. We use this to set the interrupt line high.
 void spi_post_queued_cb(spi_slave_transaction_t *trans) {
     WRITE_PERI_REG(GPIO_OUT_W1TS_REG, (1<<SPI_INT));
@@ -689,6 +700,8 @@ void app_main()
     esp_err_t ret;
 
     generateAttrTable();
+    
+    nvs_flash_init();
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ret = esp_bt_controller_init(&bt_cfg);
@@ -758,17 +771,36 @@ void app_main()
         for (int i = 0; i < r->length / 8; i++) printf("%x ", recvbuf[i]);
         printf("\n");
         
+        memset(sendbuf,  0, 32);
+        
+        uint16_t inUUID;
+        GATT_CHARACTERISTIC_t *charact;
+        
         if (recvbuf[0] == 0xA5)
         {
+            inUUID = recvbuf[2] + (recvbuf[3] * 256);
+            charact = getCharacteristicByUUID(inUUID);
             if (recvbuf[1] == 0x40)
             {
-                printf("Request to update a parameter: %i\n", recvbuf[2]);
-                //recvbuf[3]
-
+                if (charact)
+                {
+                    printf("Request to update a parameter: %x    %s\n", inUUID, charact->description);
+                } else printf("Request to update a parameter: %x    Unknown UUID!", inUUID);
             }
             else if (recvbuf[1] == 0xC0)
             {
-                printf("Request to get current value of parameter: %i\n", recvbuf[2]);
+                if (charact) 
+                {
+                    printf("Request to get current value of parameter: %x     %s\n", inUUID, charact->description);
+                    sendbuf[0] = 0x81;
+                    sendbuf[1] = 0xC0;
+                    sendbuf[2] = recvbuf[2];
+                    sendbuf[3] = recvbuf[3];
+                    for (int j = 0; j < charact->minLen; j++)
+                    {
+                        sendbuf[4 + j] = charact->data[j];
+                    }
+                } else printf("Request to get current value of parameter: %x   Unknown UUID!\n", inUUID);
             }
             else
             {

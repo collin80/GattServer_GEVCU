@@ -40,12 +40,14 @@ void setup() {
 void loop() {
    static uint32_t lastCount;
    static int which = 0;
+   uint8_t buff[8];
    if (Serial4.available()) Serial.write(Serial4.read());
 #ifdef BOOTLOADER
    if (Serial.available()) Serial4.write(Serial.read());
 #else
-   if ((lastCount + 100000) < millis())
+   if ((lastCount + 4000) < millis())
    {
+      Serial.println();
       lastCount = millis();
       digitalWrite(BLE_CS, LOW);
       delayMicroseconds(10);
@@ -54,62 +56,82 @@ void loop() {
       //Yeah, that's stupid.
       if (which == 0)
       {
-          SPI.transfer(0xA5);
-          SPI.transfer(0x40);
-          SPI.transfer(1);
-          SPI.transfer(40);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
+          buff[0] = SPI.transfer(0xA5);
+          buff[1] = SPI.transfer(0x40);
+          buff[2] = SPI.transfer(0x01);
+          buff[3] = SPI.transfer(0x32);
+          buff[4] = SPI.transfer(0);
+          buff[5] = SPI.transfer(0);
+          buff[6] = SPI.transfer(0);
+          buff[7] = SPI.transfer(0);
       }
       if (which == 1)
       {
-          SPI.transfer(0xA5);
-          SPI.transfer(0x40);
-          SPI.transfer(10);
-          SPI.transfer(40);
-          SPI.transfer(23);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
+          buff[0] = SPI.transfer(0xA5);
+          buff[1] = SPI.transfer(0x40);
+          buff[2] = SPI.transfer(0x09);
+          buff[3] = SPI.transfer(0x33);
+          buff[4] = SPI.transfer(00);
+          buff[5] = SPI.transfer(0);
+          buff[6] = SPI.transfer(0);
+          buff[7] = SPI.transfer(0);
       }
       if (which == 2)
       {
-          SPI.transfer(0xA5);
-          SPI.transfer(0xC0);
-          SPI.transfer(5);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
+          buff[0] = SPI.transfer(0xA5);
+          buff[1] = SPI.transfer(0xC0);
+          buff[2] = SPI.transfer(0x06);
+          buff[3] = SPI.transfer(0x31);
+          buff[4] = SPI.transfer(1);
+          buff[5] = SPI.transfer(2);
+          buff[6] = SPI.transfer(4);
+          buff[7] = SPI.transfer(8);
       }
       if (which == 3)
       {
-          SPI.transfer(0xBE);
-          SPI.transfer(0x40);
-          SPI.transfer(1);
-          SPI.transfer(40);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
-      }
+          buff[0] = SPI.transfer(0xA5);
+          buff[1] = SPI.transfer(0xC0);
+          buff[2] = SPI.transfer(0x3E);
+          buff[3] = SPI.transfer(0x35);
+          buff[4] = SPI.transfer(1);
+          buff[5] = SPI.transfer(2);
+          buff[6] = SPI.transfer(4);
+          buff[7] = SPI.transfer(8);
+      }      
       if (which == 4)
       {
-          SPI.transfer(0xA5);
-          SPI.transfer(0x4D);
-          SPI.transfer(1);
-          SPI.transfer(40);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
-          SPI.transfer(0);
+          buff[0] = SPI.transfer(0xBE);
+          buff[1] = SPI.transfer(0x40);
+          buff[2] = SPI.transfer(1);
+          buff[3] = SPI.transfer(40);
+          buff[4] = SPI.transfer(0);
+          buff[5] = SPI.transfer(0);
+          buff[6] = SPI.transfer(0);
+          buff[7] = SPI.transfer(0);
+      }
+      if (which == 5)
+      {
+          buff[0] = SPI.transfer(0xA5);
+          buff[1] = SPI.transfer(0x4D);
+          buff[2] = SPI.transfer(1);
+          buff[3] = SPI.transfer(40);
+          buff[4] = SPI.transfer(0);
+          buff[5] = SPI.transfer(0);
+          buff[6] = SPI.transfer(0);
+          buff[7] = SPI.transfer(0);
       }      
+
+      Serial.print("Reply from previous msg: ");
+      for (int j = 0; j < 8; j++) 
+      {
+        Serial.print(buff[j], HEX);
+        Serial.print(" ");
+      }
+      Serial.println();
+      
       
       digitalWrite(BLE_CS, HIGH);      
-      which = (which + 1) % 5;
+      which = (which + 1) % 6;
    }   
 #endif
    
